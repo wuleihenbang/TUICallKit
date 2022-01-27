@@ -1937,29 +1937,11 @@ Component({
       }
 
     },
-    _getToken({ uid, appkey }) {
-      return new Promise((resolve, reject) => {
-        wx.request({
-          method: "POST",
-          header: {
-            'Content-Type': 'application/x-www-form-urlencoded;charset=utf-8',
-          },
-          url: `https://nrtc.netease.im/demo/getChecksum.action`,
-          data: {
-            uid,
-            appkey
-          },
-          success: function (res) {
-            logger.log("====res====", res)
-            resolve(res.data.checksum)
-          },
-          fail: function (err) {
-            logger.log("=====errr", err)
-            resolve()
-          }
-        })
-      })
-    },
+    // 设置安全模式
+    // _getToken({ uid, appkey }) {
+    //    // todo：此获取token函数需要业务方自己实现，然后替换该示例
+    //    return token
+    // },
     _removeListener() {
       if (this.client) {
         this.client.off(CLIENT_EVENT.ERROR)
