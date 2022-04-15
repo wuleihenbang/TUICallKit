@@ -2,13 +2,21 @@ export const uuid = () => Math.ceil(Math.random() * 1e5) + '';
 export const requestId = () => `${+new Date() + uuid()}_id`;
 
 export const toast = (title, icon = 'none', duration, options) => {
+  return new Promise((resolve, reject) => {
     wx.showToast({
-        title: title || '',
-        icon: icon,
-        image: (options && options.image) || '',
-        duration: duration || 2000,
-        mask: false,
-    });
+      title: title || '',
+      icon: icon,
+      image: (options && options.image) || '',
+      duration: duration || 2000,
+      mask: false,
+      success: function (res) {
+        resolve(res)
+      },
+      fail: function (err) {
+        reject(err);
+      }
+    })
+  })
 }
 
 export const compareVersion = (curVersion = '', target = '') => {
@@ -47,12 +55,12 @@ export const parseAttachExt = (attachExt) => {
 }
 
 export const prevent = (fn, delay) => {
-  let last = 0
-  return function(...args) {
-    const cur = Date.now()
-    if (cur - last > delay) {
-      fn.apply(this, args);
-      last = cur;
-    }
-  }
+	let last = 0
+	return function(...args) {
+	  const cur = Date.now()
+	  if (cur - last > delay) {
+		fn.apply(this, args);
+		last = cur;
+	  }
+	}
 }

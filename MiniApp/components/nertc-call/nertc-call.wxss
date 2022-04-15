@@ -8,6 +8,10 @@
   justify-content: center;
   align-content: flex-start;
 }
+.nertc-content-container {
+  width: 100vw;
+  height: 100vh;
+}
 
 .user-item {
   position: relative;
@@ -98,6 +102,13 @@
   align-items: center;
   padding: 36rpx 80rpx;
   z-index: 1000;
+}
+.tools.show {
+  display: flex;
+}
+
+.tools.hidden {
+  display: none;
 }
 
 .audio-tools {

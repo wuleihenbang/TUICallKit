@@ -110,15 +110,6 @@
       this.nertcComponent = this.selectComponent('#nertc-component')
       this.bindEvent()
     },
-    /**
-     * 生命周期函数--监听页面卸载
-     */
-    onUnload: function () {
-      // 取消监听事件
-      this.unbindTRTCCallingRoomEvent();
-      // 退出登录
-      this.TRTCCalling.logout();
-    },
 
     startCall() {
       this.nertcComponent.call({

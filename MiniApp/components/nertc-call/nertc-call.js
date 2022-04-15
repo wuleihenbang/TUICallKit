@@ -57,6 +57,9 @@ Component({
     playerVideoBitrate: null,
     playerAudioBitrate: null,
     callType: 2, // 通话类型1：语音，2：视频
+    toolsVisible: true, // 操作栏显示开关
+    isPublishCount: 0, // 重新推流的次数（最多3次）
+    isConnected: true, // 断网是否重连，用于当用户wifi和流量同时开启时候会走两次网络监听
   },
 
   lifetimes: {
@@ -82,6 +85,8 @@ Component({
       // 停止所有拉流，并重置数据
       this._hangUp()
       this._clearChannelTimer()
+      // 取消监听网络状态变化事件
+      wx.offNetworkStatusChange()
       //取消监听
       this._removeListener()
       setTimeout(() => {
@@ -161,8 +166,10 @@ Component({
       this.requestId = requestId()
       this.callStatus = CallingStatus.idle//呼叫状态
       this.callTimeout = undefined; // 主叫方呼叫超时时间
+      this.acceptTimeout = undefined; // 被叫方加入房间的超时时间
       this.rejectTimeout = undefined; // 被叫方超时拒绝时间
       this.callTimer = null
+      this.acceptTimer = null
       this.rejectTimer = null
       this.channelTimer = null
       this._emitter = new Event()
@@ -174,6 +181,7 @@ Component({
       this.mutiClientOp = false
       this._initStatus()
       this._keepScreenOn()
+      this._setToolsHide()
     },
     _keepChannelOn() {
       this._clearChannelTimer()
@@ -181,7 +189,7 @@ Component({
         if (this.channelInfo?.channelId) {
           logger.warn("===signalingDelay", this.channelInfo)
           this.NIM.signalingDelay({
-            channelId: this.channelInfo.channelId,
+            channelId: this.channelInfo && this.channelInfo.channelId,
           });
         }
       }, 120000)
@@ -199,7 +207,6 @@ Component({
         isOnHideAddStream: false, // onHide后有新增Stream
       }
       this._isFullScreen = false // 是否全屏模式
-
     },
     /**
     * 初始化G2
@@ -275,26 +282,28 @@ Component({
             switch (error.code) {
               // 账号或者密码错误, 请跳转到登录页面并提示错误
               case 302:
-                toast("账号或者密码错误")
-                wx.navigateBack({
-                  delta: 1,
+                toast("账号或者密码错误").then(() => {
+                  wx.navigateBack({
+                    delta: 1,
+                  })
                 })
                 break;
               // 重复登录, 已经在其它端登录了, 请跳转到登录页面并提示错误
               case 417:
-                toast("重复登录, 已在其它端登录")
-                wx.navigateBack({
-                  delta: 1,
+                toast("重复登录, 已在其它端登录").then(() => {
+                  wx.navigateBack({
+                    delta: 1,
+                  })
                 })
                 break;
               // 被踢, 请提示错误后跳转到登录页面
               case 'kicked':
                 toast("您已被踢下线")
-                _this.hangup({ channelId: this.channelInfo.channelId, offlineEnabled: true })
+                _this.hangup({ channelId: this.channelInfo && this.channelInfo.channelId, offlineEnabled: true })
                 _this._exitRoom(false)
                 break;
               default:
-                _this.hangup({ channelId: this.channelInfo.channelId, offlineEnabled: true })
+                _this.hangup({ channelId: this.channelInfo && this.channelInfo.channelId, offlineEnabled: true })
                 _this._exitRoom(false)
                 break;
             }
@@ -325,13 +334,14 @@ Component({
       } catch (err) {
         params?.fail?.(err);
       }
+
     },
     /**
   * 设置呼叫超时时间，在呼叫前调用
   * @param t 超时时间，单位ms
   */
     setCallTimeout(t) {
-      this.callTimeout = this.rejectTimeout = t;
+      this.callTimeout = this.rejectTimeout = this.acceptTimeout = t;
     },
     /**
      * 邀请通话，被邀请方会收到的回调，组合行为（创建+邀请）
@@ -382,7 +392,7 @@ Component({
         this.requestId = requestId()
 
         const inviteParam = {
-          channelId: this.channelInfo.channelId,
+          channelId: this.channelInfo && this.channelInfo.channelId,
           type,
           account: userId,
           requestId: this.requestId,
@@ -512,7 +522,7 @@ Component({
               logger.warn("this.mutiClientOp")
               return
             }
-            if ((this.channelInfo && this.channelInfo.channelId) !== event.channelId) {
+            if (this.channelInfo && this.channelInfo.channelId !== event.channelId) {
               logger.warn("channleId不同")
               return
             }
@@ -536,7 +546,7 @@ Component({
             break;
           case 'REJECT':
             logger.log("独立呼叫信令：拒绝邀请事件", event);
-            if (this.channelInfo.channelId !== event.channelId) {
+            if (this.channelInfo && this.channelInfo.channelId !== event.channelId) {
               logger.warn("channleId不同")
               return
             }
@@ -554,7 +564,7 @@ Component({
             break;
           case 'ACCEPT':
             logger.log("独立呼叫信令：被邀请者接受邀请事件", event);
-            if (this.channelInfo.channelId !== event.channelId) {
+            if (this.channelInfo && this.channelInfo.channelId !== event.channelId) {
               logger.warn("channleId不同")
               return
             }
@@ -587,7 +597,7 @@ Component({
               this.channelInfo = event
               let member = this.joinInfo.members.filter(item => item.accid === this.data.config.account)
               await this._enterRoom({
-                channelName: this.channelInfo.channelId,
+                channelName: this.channelInfo && this.channelInfo.channelId,
                 uid: member[0]?.uid,
               })
               // 发送一条自定义信令给接收方，告知他可以加入RTC房间了
@@ -841,10 +851,12 @@ Component({
         if (isBusy) {
           _params.attachExt = '601';
         }
-        this.NIM.signalingReject(_params).then(data => {
+        this.NIM.signalingReject(_params)
+        .then(data => {
           logger.warn("独立呼叫信令，拒绝别人的邀请，data：", data)
           logger.log('rejectCall success');
-        }).catch(error => {
+        })
+        .catch(error => {
           logger.warn("独立呼叫信令，拒绝别人的邀请失败，error：", error)
           if (error.code == 10404) {
             logger.warn("频道不存在");
@@ -948,7 +960,7 @@ Component({
         }
         // 通知对端需要切换为音频
         await this.NIM.signalingControl({
-          channelId: this.channelInfo.channelId,
+          channelId: this.channelInfo && this.channelInfo.channelId,
           account: '',
           attachExt: JSON.stringify({ cid: 2, type: 1 }),
         });
@@ -1024,8 +1036,8 @@ Component({
                 pusher
               }, () => {
                 logger.log(TAG_NAME, 'enterRoom success', this.data.pusher)
-                this._emitter.emit('onJoinChannel', this.client._info);
                 this._pusherStart()
+                this._offlineHandle()
                 this.status.isPush = true
                 resolve()
               })
@@ -1148,7 +1160,9 @@ Component({
         return Promise.reject(TAG_NAME, 'togglePlayerFullScreen', 'remoteUser is not found')
       }
       if (user.isFullScreen) {
-        this._setPusherNormal()
+        // this._setPusherNormal()
+        // 对端缩小，本端需要放大，否则放大区无视频显示黑屏
+        this._setPusherFullScreen()
         this.userController.getAllUser().forEach(item => {
           this._setPlayerNormal(item.uid)
         })
@@ -1222,6 +1236,14 @@ Component({
         let info = await this._getChannelMember(event.channelName)
         let member = info.members.filter(item => item.accid === this.data.config.account)
         logger.log("==info", info, member)
+
+        // fix: 主叫呼出后断网不在房间里的场景，需要在_onClientJoin之前触发
+        if (this.acceptTimeout !== undefined) {
+          this.acceptTimer = setTimeout(async () => {
+            this._hangUp()
+          }, 5000);
+        }
+
         await this._enterRoom({ channelName: event.channelId, uid: member[0]?.uid })
         this.durations = [
           {
@@ -1285,7 +1307,7 @@ Component({
         };
         const attach = {
           type: this.callType,
-          channelId: this.channelInfo.channelId,
+          channelId: this.channelInfo && this.channelInfo.channelId,
           status: statusMap[status],
           durations: this.durations.map((item) => ({
             ...item,
@@ -1375,6 +1397,10 @@ Component({
         clearTimeout(this.callTimer);
         this.callTimer = null;
       }
+      if (this.acceptTimer) {
+        clearTimeout(this.acceptTimer);
+        this.acceptTimer = null;
+      }
       if (this.rejectTimer) {
         clearTimeout(this.rejectTimer);
         this.rejectTimer = null;
@@ -1426,7 +1452,7 @@ Component({
 
         }
       } catch (error) {
-        logger.error(TAG_NAME, '_onStreamAdded fail: ', error)
+        logger.error(TAG_NAME, '_onStreamAdded fail: ', err)
       }
     },
     _onStreamRemoved(data) {
@@ -1520,6 +1546,7 @@ Component({
         this._sortPlayerListenerIndex()
       }
       this._setList()
+      this._clearTimer()
       this._emitter.emit("onUserEnter", { userId: this.data.config.account, uid })
     },
     _onClientUpdate(data) {
@@ -1545,7 +1572,7 @@ Component({
     },
     _onKicked(data) {
       logger.log(TAG_NAME, '_onKicked', data)
-      this.hangup({ channelId: this.channelInfo.channelId, offlineEnabled: true })
+      this.hangup({ channelId: this.channelInfo && this.channelInfo.channelId, offlineEnabled: true })
       this._exitRoom(false)
     },
     _onOpen(data) {
@@ -1660,7 +1687,8 @@ Component({
           break
         case -1307:
           logger.error(TAG_NAME, '推流连接断开: ', code)
-          this._pusherStart()
+          // 断网场景会导致频繁切换音视频开关，网络恢复后再重新推流
+          // this._pusherStart()
           break
         case 5000:
           logger.log(TAG_NAME, '小程序被挂起: ', code)
@@ -1810,18 +1838,32 @@ Component({
       }
       cb?.()
     },
-    _pusherStart() {
+    _pusherStart(type) {
       let func = () => {
         this.data.pusher.getPusherContext().start({
           success: () => {
             logger.log(TAG_NAME, '_pusherStart 推流成功')
+            this.setData({
+              isPublishCount: 0
+            })
           },
           fail: (err) => {
             logger.log(TAG_NAME, '_pusherStart 推流失败', err)
+            this._rePusherStart(type)
           },
         })
       }
       this._pusherValid(func)
+    },
+
+    // 失败后重新尝试推流3次
+    _rePusherStart(type) {
+      logger.log(type, this.data.isPublishCount, '_rePusherStart')
+      if (this.data.isPublishCount >= 3) return
+      this._pusherStart(type)
+      this.setData({
+        isPublishCount: this.data.isPublishCount + 1
+      })
     },
 
     _toggleVideo: prevent(function () {
@@ -1848,8 +1890,9 @@ Component({
     _togglePusherFullScreen() {
       if (this.data.pusher.isFullScreen) {
         this._setPusherNormal()
+        // 本端缩放时，对端要放大
         this.userController.getAllUser().forEach(item => {
-          this._setPlayerNormal(item.uid)
+          this._setPlayerFullScreen(item.uid)
         })
         this._isFullScreen = false
       } else {
@@ -1915,21 +1958,78 @@ Component({
     _preventBubble() {
       // 阻止冒泡
     },
+
+    // 延迟5s隐藏操作栏
+    _setToolsHide() {
+      this.timer = setTimeout(() => {
+        // 5s内没有点击行为就隐藏tools
+        if (!this.data.boradClick) {
+          this.setData({
+            toolsVisible: false
+          })
+        } else {
+          clearTimeout(this.timer)
+          this.setData({
+            boradClick:  false
+          })
+          this._setToolsHide()
+        }
+      }, 5000);
+    },
+
+    // 点击空白区显示隐藏操作栏
+    _onclickRoomBoard() {
+      this.setData({
+        toolsVisible: !this.data.toolsVisible,
+        boradClick: true
+      })
+      this._setToolsHide()
+    },
+
+    // 断网检测
+    _offlineHandle() {
+      console.log('_offlineHandle')
+      wx.onNetworkStatusChange(res => {
+        debugger
+        console.log(res, '_offlineHandle')
+        if(this.data.isConnected && res.isConnected) { // 已经是联网状态且最新状态也是联网不操作
+          return
+        }
+        this.setData({
+          isConnected: res.isConnected
+        })
+        this._leaveByOffline(res.isConnected)
+        if(res.isConnected) { // 更新状态
+          logger.log('联网，更新状态')
+          // 重新推流
+          this._pusherStart()
+        }
+      })
+    },
+
+    _leaveByOffline(isConnected) {
+      wx.showToast({
+        title: isConnected ? '当前网络已恢复' : '当前网络已断开',
+        icon: 'none',
+        duration: 2000
+      })
+    },
+
     /**
      * 退出通话
      */
     async _hangUp(sendMsg) {
       try {
-        logger.log("--hangUp", this.channelInfo, this.callStatus)
+        logger.log("--hangUp", this.channelInfo, this.callStatus,this.acceptTimer)
         if (this.userId) {
           await this.cancel({
-            channelId: this.channelInfo.channelId,
+            channelId: this.channelInfo && this.channelInfo.channelId,
             account: this.userId,
             requestId: this.requestId,
             offlineEnabled: true,
           }, sendMsg)
         }
-        this.hangup({ channelId: this.channelInfo.channelId, offlineEnabled: true })
+        this.hangup({ channelId: this.channelInfo && this.channelInfo.channelId, offlineEnabled: true })
         this._exitRoom(false)
       } catch (err) {
         logger.warn("hangUp==error", err)
@@ -1937,11 +2037,29 @@ Component({
       }
 
     },
-    // 设置安全模式
-    // _getToken({ uid, appkey }) {
-    //    // todo：此获取token函数需要业务方自己实现，然后替换该示例
-    //    return token
-    // },
+    _getToken({ uid, appkey }) {
+      return new Promise((resolve, reject) => {
+        wx.request({
+          method: "POST",
+          header: {
+            'Content-Type': 'application/x-www-form-urlencoded;charset=utf-8',
+          },
+          url: `https://nrtc.netease.im/demo/getChecksum.action`,
+          data: {
+            uid,
+            appkey
+          },
+          success: function (res) {
+            logger.log("====getToken res====", res)
+            resolve(res.data.checksum)
+          },
+          fail: function (err) {
+            logger.log("=====getToken err", err)
+            resolve()
+          }
+        })
+      })
+    },
     _removeListener() {
       if (this.client) {
         this.client.off(CLIENT_EVENT.ERROR)
