@@ -49,4 +49,4 @@
   
   - 单击【预览】，生成二维码，通过手机微信扫码二维码即可进入小程序。
 
-  <img src="./assets/images/image-20211008101000.png" width="30%"/>
+  <img src="./assets/images/image-20211008101000.jpg" width="30%"/>
